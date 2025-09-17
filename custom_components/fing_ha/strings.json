@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure Fing HA",
+        "description": "Enter your Fing server details to set up the integration.",
+        "data": {
+          "host": "Host IP",
+          "port": "Port (optional)",
+          "api_key": "API Key",
+          "scan_interval": "Scan Interval (seconds)",
+          "enable_notifications": "Enable Notifications for Device Events",
+          "exclude_unknown_devices": "Exclude Unknown Devices from Entities"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the Fing API. Please check your host and port.",
+      "invalid_auth": "Invalid API key. Please verify your API key.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "Device is already configured."
+    }
+  }
+}

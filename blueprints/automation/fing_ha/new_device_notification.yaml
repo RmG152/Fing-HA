@@ -1,0 +1,51 @@
+blueprint:
+  name: "Fing HA: New Device Notification"
+  description: "Send a notification when a new device is detected on the network"
+  domain: automation
+  input:
+    device_sensor:
+      name: "Device Online Sensor"
+      description: "The binary sensor that tracks if the device is online"
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: connectivity
+    notification_target:
+      name: "Notification Target"
+      description: "Who should receive the notification"
+      selector:
+        target:
+          entity:
+            domain: notify
+    message:
+      name: "Notification Message"
+      description: "Message to send when device comes online"
+      default: "New device '{{ trigger.to_state.attributes.friendly_name }}' detected on network"
+      selector:
+        text:
+    title:
+      name: "Notification Title"
+      description: "Title for the notification"
+      default: "New Device Online"
+      selector:
+        text:
+
+mode: single
+
+trigger:
+  platform: state
+  entity_id: !input device_sensor
+  to: "on"
+  for:
+    minutes: 2
+
+condition:
+  - condition: template
+    value_template: "{{ trigger.from_state.state == 'off' }}"
+
+action:
+  - service: notify.notify
+    target: !input notification_target
+    data:
+      title: !input title
+      message: !input message

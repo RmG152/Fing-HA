@@ -1,0 +1,369 @@
+"""Fing HA sensor platform."""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from homeassistant.components.binary_sensor import (
+    BinarySensorEntity,
+    BinarySensorDeviceClass,
+)
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class FingDeviceBinarySensor(CoordinatorEntity, BinarySensorEntity):
+    """Representation of a Fing device binary sensor."""
+
+    def __init__(self, coordinator, device_id: str, device_data: dict[str, Any]) -> None:
+        """Initialize the binary sensor."""
+        super().__init__(coordinator)
+        self.device_id = device_id
+        self._device_data = device_data
+
+        # Use MAC address for unique ID to handle duplicate device names
+        mac_address = device_data.get('mac_address', device_id)
+        hostname = device_data.get('hostname', device_id)
+
+        # Create unique ID using MAC address
+        self._attr_unique_id = f"{DOMAIN}_{mac_address}_online"
+
+        # Create friendly name that includes both hostname and MAC for clarity
+        short_mac = mac_address.replace(':', '')[-4:] if ':' in mac_address else mac_address[-4:]
+        self._attr_name = f"{hostname} ({short_mac}) Online"
+
+        self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, mac_address)},
+            name=f"{hostname} ({short_mac})",
+            manufacturer=device_data.get("vendor", "Unknown"),
+            model=device_data.get("device_type", "Unknown"),
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return true if the device is online."""
+        try:
+            devices = self.coordinator.data.get("devices")
+            if not devices:
+                return False
+
+            # Handle DeviceResponse object from Fing API
+            if hasattr(devices, '_devices'):
+                for device in devices._devices:
+                    mac = getattr(device, 'mac_address', getattr(device, 'mac', None))
+                    if mac == self.device_id:
+                        # Check _device_json first (this is where Fing API stores the data)
+                        if hasattr(device, '_device_json') and isinstance(getattr(device, '_device_json'), dict):
+                            device_json = getattr(device, '_device_json')
+                            if 'state' in device_json:
+                                state_value = device_json['state']
+                                # 'UP' means online, 'DOWN' means offline
+                                return state_value == 'UP'
+
+                        # Fallback to direct attributes if _device_json not available
+                        if hasattr(device, 'online'):
+                            return bool(getattr(device, 'online'))
+                        elif hasattr(device, 'is_online'):
+                            return bool(getattr(device, 'is_online'))
+                        elif hasattr(device, 'status'):
+                            status = getattr(device, 'status')
+                            if isinstance(status, str):
+                                return status.lower() in ['online', 'true', '1', 'yes', 'up']
+                            return bool(status)
+
+                        # Default to True if we can't determine (device exists so it's likely online)
+                        _LOGGER.debug("Could not determine online status for device %s, defaulting to online", mac)
+                        return True
+
+            # Fallback to dict lookup if devices is a dict
+            elif isinstance(devices, dict):
+                device_data = devices.get(self.device_id, {})
+                online_status = device_data.get("online")
+                if online_status is None:
+                    return False
+                return bool(online_status)
+
+            return False
+        except (KeyError, TypeError, AttributeError) as e:
+            _LOGGER.debug("Error getting online status for device %s: %s", self.device_id, e)
+            return False
+
+
+class FingDeviceSensor(CoordinatorEntity, SensorEntity):
+    """Representation of a Fing device sensor."""
+
+    def __init__(self, coordinator, device_id: str, device_data: dict[str, Any], sensor_type: str) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self.device_id = device_id
+        self._device_data = device_data
+        self.sensor_type = sensor_type
+
+        # Use MAC address for unique ID to handle duplicate device names
+        mac_address = device_data.get('mac_address', device_id)
+        hostname = device_data.get('hostname', device_id)
+
+        # Create unique ID using MAC address
+        self._attr_unique_id = f"{DOMAIN}_{mac_address}_{sensor_type}"
+
+        # Create friendly name that includes both hostname and MAC for clarity
+        short_mac = mac_address.replace(':', '')[-4:] if ':' in mac_address else mac_address[-4:]
+        sensor_type_title = sensor_type.title()
+        if sensor_type == "ip":
+            sensor_type_title = "IP Address"
+        self._attr_name = f"{hostname} ({short_mac}) {sensor_type_title}"
+
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, mac_address)},
+            name=f"{hostname} ({short_mac})",
+            manufacturer=device_data.get("vendor", "Unknown"),
+            model=device_data.get("device_type", "Unknown"),
+        )
+        # Set attributes based on sensor type
+        if sensor_type == "ip":
+            # IP addresses don't have a specific device class in this HA version
+            pass
+        elif sensor_type == "bandwidth":
+            # Use a generic data rate approach
+            self._attr_state_class = SensorStateClass.MEASUREMENT
+            self._attr_unit_of_measurement = "Mbps"
+        # Add more sensor types as needed
+
+    @property
+    def native_value(self) -> str | int | None:
+        """Return the state of the sensor."""
+        try:
+            devices = self.coordinator.data.get("devices")
+            if not devices:
+                return None
+
+            # Handle DeviceResponse object from Fing API
+            if hasattr(devices, '_devices'):
+                for device in devices._devices:
+                    mac = getattr(device, 'mac_address', getattr(device, 'mac', None))
+                    if mac == self.device_id:
+                        # Check _device_json first for accurate data
+                        if hasattr(device, '_device_json') and isinstance(getattr(device, '_device_json'), dict):
+                            device_json = getattr(device, '_device_json')
+
+                            if self.sensor_type == "ip":
+                                if 'ip' in device_json and device_json['ip']:
+                                    # IP is stored as a list, get the first one
+                                    ip_list = device_json['ip']
+                                    return ip_list[0] if isinstance(ip_list, list) and ip_list else None
+                                return None
+
+                            elif self.sensor_type == "bandwidth":
+                                # Fing API doesn't provide bandwidth data, return 0
+                                _LOGGER.debug("Device %s bandwidth requested but not available in Fing API", mac)
+                                return 0.0
+
+                            else:
+                                # Try to get other attributes from _device_json
+                                if self.sensor_type in device_json:
+                                    return device_json[self.sensor_type]
+                                # Fall back to device attributes
+                                value = getattr(device, self.sensor_type, None)
+                                return value
+
+                        # Fallback to direct device attributes
+                        if self.sensor_type == "ip":
+                            value = getattr(device, 'ip_address', getattr(device, 'ip', None))
+                            return value if value else None
+                        elif self.sensor_type == "bandwidth":
+                            value = getattr(device, 'bandwidth', getattr(device, 'bw', 0))
+                            try:
+                                if isinstance(value, (int, float)):
+                                    return float(value)
+                                elif isinstance(value, str):
+                                    import re
+                                    match = re.search(r'(\d+(?:\.\d+)?)', value)
+                                    return float(match.group(1)) if match else 0.0
+                                return 0.0
+                            except (ValueError, TypeError):
+                                return 0.0
+                        else:
+                            # Try to get other attributes
+                            value = getattr(device, self.sensor_type, None)
+                            return value
+
+            # Fallback to dict lookup if devices is a dict
+            elif isinstance(devices, dict):
+                device_data = devices.get(self.device_id, {})
+                value = device_data.get(self.sensor_type)
+                if value is None:
+                    return None
+                # Ensure proper type conversion
+                if self.sensor_type == "bandwidth":
+                    try:
+                        # Convert bandwidth to Mbps if it's a number
+                        if isinstance(value, (int, float)):
+                            return float(value)
+                        # If it's a string, try to extract numeric value
+                        elif isinstance(value, str):
+                            import re
+                            match = re.search(r'(\d+(?:\.\d+)?)', value)
+                            return float(match.group(1)) if match else None
+                        return None
+                    except (ValueError, TypeError):
+                        return None
+                return value
+
+            return None
+        except (KeyError, TypeError, AttributeError) as e:
+            _LOGGER.debug("Error getting %s value for device %s: %s", self.sensor_type, self.device_id, e)
+            return None
+
+
+def _create_entities(coordinator, devices):
+    """Create entities for large device lists."""
+    _LOGGER.debug("Creating entities for devices: %s", devices)
+    entities = []
+
+    # Handle None or empty devices
+    if devices is None:
+        _LOGGER.debug("Devices is None, returning empty entities list")
+        return entities
+
+    try:
+        if hasattr(devices, '_devices'):
+            # Handle DeviceResponse object from fing-agent-api
+            devices_list = devices._devices
+            _LOGGER.debug("Found DeviceResponse with %d devices", len(devices_list))
+
+            for device in devices_list:
+                # Extract basic device info for entity creation
+                mac = None
+                hostname = f'Device_{mac}'
+                vendor = 'Unknown'
+                device_type = 'unknown'
+
+                # Get data from _device_json for accuracy
+                if hasattr(device, '_device_json') and isinstance(getattr(device, '_device_json'), dict):
+                    device_json = getattr(device, '_device_json')
+                    mac = device_json.get('mac')
+                    hostname = device_json.get('name', f'Device_{mac}')
+                    vendor = device_json.get('make', 'Unknown')
+                    device_type = device_json.get('type', 'unknown')
+
+                # Fallback to device attributes if _device_json not available
+                if not mac:
+                    mac = getattr(device, 'mac_address', getattr(device, 'mac', None))
+                if not mac:
+                    continue
+
+                if hostname == f'Device_{mac}':  # Still default
+                    hostname = getattr(device, 'hostname', getattr(device, 'name', f'Device_{mac}'))
+                if vendor == 'Unknown':
+                    vendor = getattr(device, 'vendor', 'Unknown')
+                if device_type == 'unknown':
+                    device_type = getattr(device, 'device_type', 'unknown')
+
+                # Create device_data dict for entity initialization
+                device_data = {
+                    'mac_address': mac,
+                    'hostname': hostname,
+                    'vendor': vendor,
+                    'device_type': device_type,
+                }
+
+                _LOGGER.debug("Creating entities for device %s: %s", mac, device_data)
+                entities.append(FingDeviceBinarySensor(coordinator, mac, device_data))
+                # Add multiple sensors per device
+                for sensor_type in ["ip", "bandwidth"]:
+                    entities.append(FingDeviceSensor(coordinator, mac, device_data, sensor_type))
+
+        elif hasattr(devices, 'items'):
+            # Handle dict-like devices
+            devices_dict = dict(devices.items())
+            _LOGGER.debug("Converted devices using items(): %s", devices_dict)
+
+            for device_id, device_data in devices_dict.items():
+                _LOGGER.debug("Creating entities for device %s: %s", device_id, device_data)
+                entities.append(FingDeviceBinarySensor(coordinator, device_id, device_data))
+                # Add multiple sensors per device
+                for sensor_type in ["ip", "bandwidth"]:
+                    entities.append(FingDeviceSensor(coordinator, device_id, device_data, sensor_type))
+
+        else:
+            _LOGGER.debug("No supported device format found, creating empty entities list")
+
+    except Exception as e:
+        _LOGGER.debug("Error creating entities: %s", e)
+
+    _LOGGER.debug("Entity creation complete, created %d entities", len(entities))
+    return entities
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Fing HA sensor platform."""
+    _LOGGER.debug("Setting up Fing HA sensor platform")
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+
+    entities = []
+    _LOGGER.debug("Coordinator data: %s", coordinator.data)
+    await coordinator.async_refresh()
+    _LOGGER.debug("Coordinator data after refresh: %s", coordinator.data)
+
+    # Ensure coordinator data is valid
+    if coordinator.data is None:
+        _LOGGER.warning("Coordinator data is None, creating empty devices dict")
+        devices = {}
+    else:
+        devices = coordinator.data.get("devices", {})
+
+    _LOGGER.debug("Devices from coordinator: %s", devices)
+    _LOGGER.debug("Devices type: %s", type(devices))
+
+    # Filter devices based on configuration
+    if entry.data.get("exclude_unknown_devices", False):
+        previous_devices = hass.data[DOMAIN][entry.entry_id].get("previous_devices", {})
+        _LOGGER.debug("Filtering unknown devices, previous devices: %s", list(previous_devices.keys()) if hasattr(previous_devices, 'keys') else previous_devices)
+        try:
+            if devices is None:
+                devices = {}
+            elif hasattr(devices, '_devices'):
+                # Handle DeviceResponse filtering
+                filtered_devices = []
+                for device in devices._devices:
+                    device_id = getattr(device, 'mac_address', getattr(device, 'mac', None))
+                    if device_id and device_id in previous_devices:
+                        filtered_devices.append(device)
+                # Create new DeviceResponse-like object
+                class FilteredDeviceResponse:
+                    def __init__(self, devices_list):
+                        self._devices = devices_list
+                        self._network_id = getattr(devices, '_network_id', None)
+                devices = FilteredDeviceResponse(filtered_devices)
+                _LOGGER.debug("Filtered to %d known devices", len(filtered_devices))
+            elif hasattr(devices, 'items'):
+                devices = {k: v for k, v in devices.items() if k in previous_devices}
+            elif hasattr(devices, '__iter__') and not isinstance(devices, (str, bytes)):
+                # For non-dict iterables, filter by index
+                devices = [item for i, item in enumerate(devices) if str(i) in previous_devices]
+            else:
+                devices = {}
+        except Exception as e:
+            _LOGGER.debug("Error filtering devices: %s", e)
+            devices = {}
+
+    _LOGGER.debug("Filtered devices: %s", devices)
+
+    # Create entities synchronously for reliable operation
+    entities = _create_entities(coordinator, devices)
+
+    async_add_entities(entities)
+    _LOGGER.info("Created %d sensor entities for Fing HA", len(entities))

@@ -1,0 +1,51 @@
+# Example configuration.yaml for Fing HA integration
+# Note: This integration uses Config Flow by default, but you can manually configure it if needed
+
+# Fing HA Integration Configuration
+fing_ha:
+  host: "your-fing-server.local"  # Replace with your Fing server hostname/IP
+  port: 49090                        # API port (default: 49090)
+  api_key: "your-api-key-here"    # Your Fing API key
+  scan_interval: 30               # Scan interval in seconds (default: 30)
+  enable_notifications: true      # Send notifications for new devices
+  exclude_unknown_devices: false  # Only show previously known devices
+
+# Example automation using Fing HA entities
+automation:
+  - id: 'fing_device_online_notification'
+    alias: 'Notify when device comes online'
+    trigger:
+      platform: state
+      entity_id: binary_sensor.my_device_online
+      to: 'on'
+    action:
+      service: notify.mobile_app_your_phone
+      data:
+        message: "Device 'My Device' is now online"
+
+  - id: 'fing_new_device_alert'
+    alias: 'Alert for new unknown devices'
+    trigger:
+      platform: event
+      event_type: device_tracker_new_device
+      event_data:
+        host_name: unknown
+    action:
+      service: notify.mobile_app_your_phone
+      data:
+        message: "New unknown device detected on network"
+
+# Example sensor configuration (if needed)
+sensor:
+  - platform: fing_ha
+    monitored_conditions:
+      - networks
+      - devices
+      - events
+      - statistics
+
+# Logger configuration for debugging
+logger:
+  default: info
+  logs:
+    custom_components.fing_ha: debug
