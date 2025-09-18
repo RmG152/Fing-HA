@@ -122,6 +122,36 @@ class FingApi:
             _LOGGER.error("Error fetching devices: %s", err)
             raise
 
+    async def async_get_agent_info(self) -> dict[str, Any]:
+        """Fetch agent information from Fing API asynchronously."""
+        _LOGGER.debug("Fetching agent info from FingAgent - starting async_get_agent_info")
+        try:
+            # Get FingAgent instance (handles SSL initialization in thread)
+            _LOGGER.debug("Getting FingAgent instance for agent info")
+            fing_agent = await self.hass.async_add_executor_job(self._get_fing_agent)
+            _LOGGER.debug("FingAgent instance obtained, preparing to call get_agent_info")
+
+            # Always execute the agent method via the retry wrapper which itself
+            # runs the call inside an executor worker.
+            _LOGGER.debug("Making API call to fing_agent.get_agent_info()")
+            result = await self._async_call_with_retry(fing_agent.get_agent_info)
+            _LOGGER.debug("FingAgent.get_agent_info() call completed successfully")
+
+            _LOGGER.debug("Raw agent info result: %s", result)
+            _LOGGER.debug("Agent info result type: %s", type(result))
+            if hasattr(result, '__dict__'):
+                _LOGGER.debug("Agent info result attributes: %s", result.__dict__)
+            elif isinstance(result, dict):
+                _LOGGER.debug("Agent info result keys: %s", list(result.keys()) if result else "empty dict")
+            elif result is None:
+                _LOGGER.debug("Agent info result is None")
+
+            return result
+        except Exception as err:
+            _LOGGER.error("Error fetching agent info: %s", err)
+            _LOGGER.debug("Agent info fetch failed with exception type: %s", type(err).__name__)
+            raise
+
     async def async_test_connection(self) -> bool:
         """Test connection to Fing API."""
         try:
