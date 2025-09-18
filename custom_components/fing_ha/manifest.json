@@ -1,15 +1,15 @@
 {
   "domain": "fing_ha",
   "name": "Fing HA",
-  "config_flow": true,
   "codeowners": [
       "@RmG152"
-  ],
+  ],  
+  "config_flow": true,
+  "dependencies": [],
   "documentation": "https://github.com/RmG152/Fing-HA",
+  "integration_type": "service",
+  "iot_class": "local_polling",  
   "issue_tracker": "https://github.com/RmG152/Fing-HA/issues",
   "requirements": ["fing-agent-api"],
-  "dependencies": [],
-  "integration_type": "service",
-  "iot_class": "local_polling",
   "version": "1.0.0"
 }
