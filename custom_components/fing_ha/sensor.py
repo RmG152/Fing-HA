@@ -373,6 +373,45 @@ def _create_entities(coordinator, devices):
     return entities
 
 
+# New helper: run filtering + creation in a thread to avoid blocking the event loop
+def _prepare_entities_sync(coordinator, devices, exclude_unknown_devices, previous_devices):
+    """Prepare and create entities off the event loop."""
+    try:
+        # Ensure devices is a safe value for processing
+        if devices is None:
+            devices = {}
+
+        # Perform the same filtering logic synchronously (safe to run in executor)
+        if exclude_unknown_devices:
+            try:
+                if hasattr(devices, '_devices'):
+                    filtered_devices = []
+                    for device in devices._devices:
+                        device_id = getattr(device, 'mac_address', getattr(device, 'mac', None))
+                        if device_id and device_id in previous_devices:
+                            filtered_devices.append(device)
+                    class FilteredDeviceResponse:
+                        def __init__(self, devices_list, orig):
+                            self._devices = devices_list
+                            self._network_id = getattr(orig, '_network_id', None)
+                    devices = FilteredDeviceResponse(filtered_devices, devices)
+                elif hasattr(devices, 'items'):
+                    devices = {k: v for k, v in devices.items() if k in previous_devices}
+                elif hasattr(devices, '__iter__') and not isinstance(devices, (str, bytes)):
+                    devices = [item for i, item in enumerate(devices) if str(i) in previous_devices]
+                else:
+                    devices = {}
+            except Exception as e:
+                _LOGGER.debug("Error filtering devices in executor: %s", e)
+                devices = {}
+
+        # Create entities (this calls the existing _create_entities helper)
+        entities = _create_entities(coordinator, devices)
+        return entities
+    except Exception as e:
+        _LOGGER.debug("Error preparing entities in executor: %s", e)
+        return []
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -382,57 +421,34 @@ async def async_setup_entry(
     _LOGGER.debug("Setting up Fing HA sensor platform")
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
-    entities = []
-    _LOGGER.debug("Coordinator data: %s", coordinator.data)
-    await coordinator.async_refresh()
-    _LOGGER.debug("Coordinator data after refresh: %s", coordinator.data)
+    # Keep the event-loop work minimal: only access small pieces of data here
+    _LOGGER.debug("Coordinator data (before create): %s", coordinator.data)
 
-    # Ensure coordinator data is valid
-    if coordinator.data is None:
-        _LOGGER.warning("Coordinator data is None, creating empty devices dict")
-        devices = {}
-    else:
-        devices = coordinator.data.get("devices", {})
+    devices = {} if coordinator.data is None else coordinator.data.get("devices", {})
 
     _LOGGER.debug("Devices from coordinator: %s", devices)
     _LOGGER.debug("Devices type: %s", type(devices))
 
-    # Filter devices based on configuration
-    if entry.data.get("exclude_unknown_devices", False):
-        previous_devices = hass.data[DOMAIN][entry.entry_id].get("previous_devices", {})
-        _LOGGER.debug("Filtering unknown devices, previous devices: %s", list(previous_devices.keys()) if hasattr(previous_devices, 'keys') else previous_devices)
+    # Prepare entities entirely in executor (includes filtering)
+    exclude = entry.data.get("exclude_unknown_devices", False)
+    previous = hass.data[DOMAIN][entry.entry_id].get("previous_devices", {})
+
+    # log start time for measurement
+    import time
+    start = time.perf_counter()
+    entities = await hass.async_add_executor_job(
+        _prepare_entities_sync, coordinator, devices, exclude, previous
+    )
+    duration = time.perf_counter() - start
+    _LOGGER.debug("Entity preparation took %.3f seconds", duration)
+
+    # Register entities asynchronously so async_setup_entry returns promptly
+    async def _async_register_entities():
         try:
-            if devices is None:
-                devices = {}
-            elif hasattr(devices, '_devices'):
-                # Handle DeviceResponse filtering
-                filtered_devices = []
-                for device in devices._devices:
-                    device_id = getattr(device, 'mac_address', getattr(device, 'mac', None))
-                    if device_id and device_id in previous_devices:
-                        filtered_devices.append(device)
-                # Create new DeviceResponse-like object
-                class FilteredDeviceResponse:
-                    def __init__(self, devices_list):
-                        self._devices = devices_list
-                        self._network_id = getattr(devices, '_network_id', None)
-                devices = FilteredDeviceResponse(filtered_devices)
-                _LOGGER.debug("Filtered to %d known devices", len(filtered_devices))
-            elif hasattr(devices, 'items'):
-                devices = {k: v for k, v in devices.items() if k in previous_devices}
-            elif hasattr(devices, '__iter__') and not isinstance(devices, (str, bytes)):
-                # For non-dict iterables, filter by index
-                devices = [item for i, item in enumerate(devices) if str(i) in previous_devices]
-            else:
-                devices = {}
+            async_add_entities(entities)
+            _LOGGER.info("Created %d sensor entities for Fing HA", len(entities))
         except Exception as e:
-            _LOGGER.debug("Error filtering devices: %s", e)
-            devices = {}
+            _LOGGER.exception("Error registering Fing HA entities: %s", e)
 
-    _LOGGER.debug("Filtered devices: %s", devices)
-
-    # Create entities synchronously for reliable operation
-    entities = _create_entities(coordinator, devices)
-
-    async_add_entities(entities)
-    _LOGGER.info("Created %d sensor entities for Fing HA", len(entities))
+    # Schedule registration and return immediately (avoid awaiting heavy work)
+    hass.async_create_task(_async_register_entities())

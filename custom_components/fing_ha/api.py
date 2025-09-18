@@ -32,23 +32,33 @@ class FingApi:
     def _get_fing_agent(self):
         """Get or create FingAgent instance, handling SSL blocking calls."""
         if self._fing is None:
-            # Initialize FingAgent in a thread to avoid blocking the event loop
+            _LOGGER.debug("Initializing FingAgent with SSL context creation - starting thread pool")
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
+                _LOGGER.debug("Submitting FingAgent initialization to thread")
                 future = executor.submit(FingAgent, key=self.api_key, ip=self.host, port=self.port)
+                _LOGGER.debug("Waiting for FingAgent initialization result")
                 self._fing = future.result()
+                _LOGGER.debug("FingAgent initialized successfully in thread")
         return self._fing
 
-    async def _async_call_with_retry(self, coro) -> Any:
+    async def _async_call_with_retry(self, coro):
         """Call an async coroutine with retry logic, timeouts, and detailed logging."""
         attempt = 0
         backoff = INITIAL_BACKOFF
         while attempt < MAX_RETRIES:
             try:
                 _LOGGER.debug("Attempting API call, attempt %d", attempt + 1)
+                _LOGGER.debug("About to call asyncio.wait_for with coro: %s", coro)
                 # Call the coroutine directly with timeout
-                result = await asyncio.wait_for(coro, timeout=TIMEOUT)
-                _LOGGER.debug("API call successful")
+                # Run the possibly-blocking coroutine in a thread so SSL
+                # operations (load_verify_locations) don't block the event loop.
+                # asyncio.run executes the coroutine in the thread's event loop.
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(asyncio.run, coro),
+                    timeout=TIMEOUT,
+                )
+                _LOGGER.debug("API call successful after wait_for completed")
                 return result
             except asyncio.TimeoutError as err:
                 _LOGGER.warning("Timeout on API call (attempt %d): %s", attempt + 1, err)
@@ -76,10 +86,12 @@ class FingApi:
 
     async def async_get_devices(self) -> dict[str, Any]:
         """Fetch devices from Fing API asynchronously."""
-        _LOGGER.debug("Fetching devices from FingAgent")
+        _LOGGER.debug("Fetching devices from FingAgent - starting async_get_devices")
         try:
             # Get FingAgent instance (handles SSL initialization in thread)
+            _LOGGER.debug("Getting FingAgent instance")
             fing_agent = self._get_fing_agent()
+            _LOGGER.debug("FingAgent instance obtained, checking get_devices method type")
 
             # Check if get_devices() is async or sync
             import inspect

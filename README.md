@@ -1,5 +1,7 @@
 # Fing HA Integration
 
+[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/docs/setup/download#hacs)
+
 Seamlessly integrate Fing's powerful network scanning capabilities into Home Assistant. Automatically discover and track devices on your local network with real-time insights and comprehensive network monitoring.
 
 ## Features
@@ -16,7 +18,7 @@ Seamlessly integrate Fing's powerful network scanning capabilities into Home Ass
 
 1. Open HACS in your Home Assistant instance
 2. Go to "Integrations" → "⋮" (Menu) → "Custom repositories"
-3. Add this repository URL and select "Integration" as category
+3. Add https://github.com/RmG152/Fing-HA as the repository URL and select "Integration" as category
 4. Search for "Fing HA" and install it
 5. Restart Home Assistant
 
@@ -45,14 +47,15 @@ Seamlessly integrate Fing's powerful network scanning capabilities into Home Ass
 Once configured, the integration will automatically:
 
 - Create binary sensors for each device showing online/offline status
-- Create sensors for device IP addresses and bandwidth usage
+- Create sensors for device IP addresses, first seen timestamps, and last changed timestamps
 - Update entities in real-time based on the scan interval
 
 ### Available Entities
 
 - **Binary Sensor**: `{device_name} Online` - Shows if device is connected
 - **Sensor**: `{device_name} IP` - Current IP address
-- **Sensor**: `{device_name} Bandwidth` - Network usage in Mbps
+- **Sensor**: `{device_name} First Seen` - Timestamp when device was first detected
+- **Sensor**: `{device_name} Last Changed` - Timestamp when device status last changed
 
 ### Automations
 
@@ -107,10 +110,7 @@ You can test the integration using the included test connection feature during s
 
 The integration provides the following API methods:
 
-- `async_get_networks()`: Retrieve list of networks
-- `async_get_devices(network_id)`: Get devices for a specific network
-- `async_get_events(network_id)`: Fetch network events
-- `async_get_statistics()`: Get network statistics
+- `async_get_devices()`: Get devices from Fing API
 - `async_test_connection()`: Test API connectivity
 
 ## Contributing
