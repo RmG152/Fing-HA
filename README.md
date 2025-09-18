@@ -2,6 +2,8 @@
 
 # Fing HA Integration
 
+**Disclaimer:** This is an unofficial integration for Fing and is not affiliated with or endorsed by Fing or its parent company. The authors are not part of the official Fing team.
+
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz/docs/setup/download#hacs)
 
 Seamlessly integrate Fing's powerful network scanning capabilities into Home Assistant. Automatically discover and track devices on your local network with real-time insights and comprehensive network monitoring.
