@@ -2,14 +2,14 @@
   "domain": "fing_ha",
   "name": "Fing HA",
   "config_flow": true,
+  "codeowners": [
+      "@RmG152"
+  ],
   "documentation": "https://github.com/RmG152/Fing-HA",
+  "issue_tracker": "https://github.com/RmG152/Fing-HA/issues",
   "requirements": ["fing-agent-api"],
-  "ssdp": [],
-  "zeroconf": [],
-  "homekit": {},
   "dependencies": [],
-  "codeowners": [],
-  "integration_warnings": ["network", "device_tracker"],
+  "integration_type": "service",
   "iot_class": "local_polling",
   "version": "1.0.0"
 }
