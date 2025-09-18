@@ -40,7 +40,7 @@ class FingDeviceBinarySensor(CoordinatorEntity, BinarySensorEntity):
         short_mac = mac_address.replace(':', '')[-4:] if ':' in mac_address else mac_address[-4:]
         self._attr_name = f"{hostname} ({short_mac}) Online"
 
-        self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+        self._attr_device_class = BinarySensorDeviceClass.PRESENCE
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, mac_address)},
             name=f"{hostname} ({short_mac})",
@@ -120,6 +120,10 @@ class FingDeviceSensor(CoordinatorEntity, SensorEntity):
         sensor_type_title = sensor_type.title()
         if sensor_type == "ip":
             sensor_type_title = "IP Address"
+        elif sensor_type == "first_seen":
+            sensor_type_title = "First Seen"
+        elif sensor_type == "last_changed":
+            sensor_type_title = "Last Changed"
         self._attr_name = f"{hostname} ({short_mac}) {sensor_type_title}"
 
         self._attr_device_info = DeviceInfo(
@@ -132,10 +136,10 @@ class FingDeviceSensor(CoordinatorEntity, SensorEntity):
         if sensor_type == "ip":
             # IP addresses don't have a specific device class in this HA version
             pass
-        elif sensor_type == "bandwidth":
-            # Use a generic data rate approach
-            self._attr_state_class = SensorStateClass.MEASUREMENT
-            self._attr_unit_of_measurement = "Mbps"
+        elif sensor_type in ["first_seen", "last_changed"]:
+            # Timestamp sensors
+            self._attr_device_class = SensorDeviceClass.TIMESTAMP
+            self._attr_state_class = None
         # Add more sensor types as needed
 
     @property
@@ -162,10 +166,40 @@ class FingDeviceSensor(CoordinatorEntity, SensorEntity):
                                     return ip_list[0] if isinstance(ip_list, list) and ip_list else None
                                 return None
 
-                            elif self.sensor_type == "bandwidth":
-                                # Fing API doesn't provide bandwidth data, return 0
-                                _LOGGER.debug("Device %s bandwidth requested but not available in Fing API", mac)
-                                return 0.0
+                            elif self.sensor_type in ["first_seen", "last_changed"]:
+                                # Handle timestamp sensors
+                                timestamp_value = device_json.get(self.sensor_type)
+                                if timestamp_value:
+                                    # Parse timestamp if it's a string
+                                    if isinstance(timestamp_value, str):
+                                        try:
+                                            from datetime import datetime
+                                            from homeassistant.util import dt as dt_util
+                                            # Try common timestamp formats
+                                            for fmt in ['%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S']:
+                                                try:
+                                                    dt = datetime.strptime(timestamp_value, fmt)
+                                                    # Make timezone-aware (assume UTC if not specified)
+                                                    if dt.tzinfo is None:
+                                                        dt = dt_util.utc_from_timestamp(dt.timestamp())
+                                                    return dt
+                                                except ValueError:
+                                                    continue
+                                            # If no format matches, return as-is
+                                            return timestamp_value
+                                        except (ValueError, TypeError):
+                                            return None
+                                    elif isinstance(timestamp_value, (int, float)):
+                                        # Unix timestamp
+                                        try:
+                                            from homeassistant.util import dt as dt_util
+                                            dt = dt_util.utc_from_timestamp(timestamp_value)
+                                            return dt
+                                        except (ValueError, TypeError, OSError):
+                                            return None
+                                    else:
+                                        return timestamp_value
+                                return None
 
                             else:
                                 # Try to get other attributes from _device_json
@@ -179,18 +213,37 @@ class FingDeviceSensor(CoordinatorEntity, SensorEntity):
                         if self.sensor_type == "ip":
                             value = getattr(device, 'ip_address', getattr(device, 'ip', None))
                             return value if value else None
-                        elif self.sensor_type == "bandwidth":
-                            value = getattr(device, 'bandwidth', getattr(device, 'bw', 0))
-                            try:
-                                if isinstance(value, (int, float)):
-                                    return float(value)
-                                elif isinstance(value, str):
-                                    import re
-                                    match = re.search(r'(\d+(?:\.\d+)?)', value)
-                                    return float(match.group(1)) if match else 0.0
-                                return 0.0
-                            except (ValueError, TypeError):
-                                return 0.0
+                        elif self.sensor_type in ["first_seen", "last_changed"]:
+                            # Handle timestamp sensors from device attributes
+                            value = getattr(device, self.sensor_type, None)
+                            if value:
+                                if isinstance(value, str):
+                                    try:
+                                        from datetime import datetime
+                                        from homeassistant.util import dt as dt_util
+                                        # Try common timestamp formats
+                                        for fmt in ['%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S']:
+                                            try:
+                                                dt = datetime.strptime(value, fmt)
+                                                # Make timezone-aware (assume UTC if not specified)
+                                                if dt.tzinfo is None:
+                                                    dt = dt_util.utc_from_timestamp(dt.timestamp())
+                                                return dt
+                                            except ValueError:
+                                                continue
+                                        return value
+                                    except (ValueError, TypeError):
+                                        return None
+                                elif isinstance(value, (int, float)):
+                                    try:
+                                        from homeassistant.util import dt as dt_util
+                                        dt = dt_util.utc_from_timestamp(value)
+                                        return dt
+                                    except (ValueError, TypeError, OSError):
+                                        return None
+                                else:
+                                    return value
+                            return None
                         else:
                             # Try to get other attributes
                             value = getattr(device, self.sensor_type, None)
@@ -202,20 +255,36 @@ class FingDeviceSensor(CoordinatorEntity, SensorEntity):
                 value = device_data.get(self.sensor_type)
                 if value is None:
                     return None
-                # Ensure proper type conversion
-                if self.sensor_type == "bandwidth":
-                    try:
-                        # Convert bandwidth to Mbps if it's a number
-                        if isinstance(value, (int, float)):
-                            return float(value)
-                        # If it's a string, try to extract numeric value
-                        elif isinstance(value, str):
-                            import re
-                            match = re.search(r'(\d+(?:\.\d+)?)', value)
-                            return float(match.group(1)) if match else None
-                        return None
-                    except (ValueError, TypeError):
-                        return None
+                # Handle timestamp sensors
+                if self.sensor_type in ["first_seen", "last_changed"]:
+                    if value:
+                        if isinstance(value, str):
+                            try:
+                                from datetime import datetime
+                                from homeassistant.util import dt as dt_util
+                                # Try common timestamp formats
+                                for fmt in ['%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S']:
+                                    try:
+                                        dt = datetime.strptime(value, fmt)
+                                        # Make timezone-aware (assume UTC if not specified)
+                                        if dt.tzinfo is None:
+                                            dt = dt_util.utc_from_timestamp(dt.timestamp())
+                                        return dt
+                                    except ValueError:
+                                        continue
+                                return value
+                            except (ValueError, TypeError):
+                                return None
+                        elif isinstance(value, (int, float)):
+                            try:
+                                from homeassistant.util import dt as dt_util
+                                dt = dt_util.utc_from_timestamp(value)
+                                return dt
+                            except (ValueError, TypeError, OSError):
+                                return None
+                        else:
+                            return value
+                    return None
                 return value
 
             return None
@@ -279,7 +348,7 @@ def _create_entities(coordinator, devices):
                 _LOGGER.debug("Creating entities for device %s: %s", mac, device_data)
                 entities.append(FingDeviceBinarySensor(coordinator, mac, device_data))
                 # Add multiple sensors per device
-                for sensor_type in ["ip", "bandwidth"]:
+                for sensor_type in ["ip", "first_seen", "last_changed"]:
                     entities.append(FingDeviceSensor(coordinator, mac, device_data, sensor_type))
 
         elif hasattr(devices, 'items'):
@@ -291,7 +360,7 @@ def _create_entities(coordinator, devices):
                 _LOGGER.debug("Creating entities for device %s: %s", device_id, device_data)
                 entities.append(FingDeviceBinarySensor(coordinator, device_id, device_data))
                 # Add multiple sensors per device
-                for sensor_type in ["ip", "bandwidth"]:
+                for sensor_type in ["ip", "first_seen", "last_changed"]:
                     entities.append(FingDeviceSensor(coordinator, device_id, device_data, sensor_type))
 
         else:
