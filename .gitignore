@@ -1,1 +1,16 @@
-/custom_components/fing_ha/__pycache__
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Pytest
+.pytest_cache/
+
+# VSCode
+.vscode/
