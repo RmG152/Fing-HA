@@ -1,5 +1,5 @@
 {
   "name": "Fing HA",
-  "domains": ["fing_ha"],
-  "homeassistant": "2023.6.0"
+  "country": "ES",
+  "homeassistant": "2025.9.0"
 }
