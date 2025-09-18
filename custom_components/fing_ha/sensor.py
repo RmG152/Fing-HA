@@ -452,3 +452,35 @@ async def async_setup_entry(
 
     # Schedule registration and return immediately (avoid awaiting heavy work)
     hass.async_create_task(_async_register_entities())
+
+    async def async_update(self) -> None:
+        """Update sensor state from Fing."""
+        try:
+            _LOGGER.debug("Updating Fing sensor data")
+            # Use the async API which already runs blocking work in the executor
+            devices = await self._api.async_get_devices()
+
+            # Process devices with the entity helper (avoids NameError)
+            self._state = self._process_devices(devices)
+
+        except Exception as err:
+             _LOGGER.error("Error updating Fing sensor: %s", err)
+
+    def _process_devices(self, devices):
+        """Convert Fing API devices payload into a sensor state.
+
+        Default: if `devices` is an iterable return its length; if it is a dict and contains
+        'devices' return the length of that list; otherwise return the string representation.
+        Adjust this function according to the exact payload structure.
+        """
+        try:
+            if isinstance(devices, dict):
+                if "devices" in devices and hasattr(devices["devices"], "__len__"):
+                    return len(devices["devices"])
+                # si el dict ya es el estado esperado, devolverlo tal cual
+                return devices
+            if hasattr(devices, "__len__") and not isinstance(devices, (str, bytes)):
+                return len(devices)
+        except Exception:
+            _LOGGER.debug("Fing sensor: _process_devices fallback used", exc_info=True)
+        return str(devices)

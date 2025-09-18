@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
+import inspect
 
 from fing_agent_api import FingAgent
 
@@ -42,24 +43,35 @@ class FingApi:
                 _LOGGER.debug("FingAgent initialized successfully in thread")
         return self._fing
 
-    async def _async_call_with_retry(self, coro_func):
-        """Call an async coroutine with retry logic, timeouts, and detailed logging."""
+    async def _async_call_with_retry(self, func):
+        """Call a (sync or async) function with retry logic, timeouts, and detailed logging.
+
+        func should be a callable with no arguments. This implementation always
+        executes the call inside the default executor to avoid any blocking
+        operations (like SSL cert loading) on the Home Assistant event loop.
+        If the callable returns an awaitable, that awaitable is executed with
+        asyncio.run inside the worker thread.
+        """
         attempt = 0
         backoff = INITIAL_BACKOFF
         while attempt < MAX_RETRIES:
             try:
                 _LOGGER.debug("Attempting API call, attempt %d", attempt + 1)
-                coro = coro_func()
-                _LOGGER.debug("About to call asyncio.wait_for with coro: %s", coro)
-                # Call the coroutine directly with timeout
-                # Run the possibly-blocking coroutine in a thread so SSL
-                # operations (load_verify_locations) don't block the event loop.
-                # asyncio.run executes the coroutine in the thread's event loop.
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(asyncio.run, coro),
-                    timeout=TIMEOUT,
-                )
-                _LOGGER.debug("API call successful after wait_for completed")
+
+                loop = asyncio.get_running_loop()
+
+                def _worker_call():
+                    # Execute the callable in the thread. If it returns an awaitable,
+                    # run it in that thread's own event loop to avoid touching the main loop.
+                    res = func()
+                    if inspect.isawaitable(res):
+                        return asyncio.run(res)
+                    return res
+
+                _LOGGER.debug("Running API call in executor to avoid event loop blocking")
+                result = await asyncio.wait_for(loop.run_in_executor(None, _worker_call), timeout=TIMEOUT)
+
+                _LOGGER.debug("API call successful on attempt %d", attempt + 1)
                 return result
             except asyncio.TimeoutError as err:
                 _LOGGER.warning("Timeout on API call (attempt %d): %s", attempt + 1, err)
@@ -83,7 +95,7 @@ class FingApi:
             attempt += 1
 
         _LOGGER.error("Max retries exceeded")
-        raise RuntimeError("Failed to execute API call after {MAX_RETRIES} attempts")
+        raise RuntimeError(f"Failed to execute API call after {MAX_RETRIES} attempts")
 
     async def async_get_devices(self) -> dict[str, Any]:
         """Fetch devices from Fing API asynchronously."""
@@ -91,18 +103,14 @@ class FingApi:
         try:
             # Get FingAgent instance (handles SSL initialization in thread)
             _LOGGER.debug("Getting FingAgent instance")
-            fing_agent = self._get_fing_agent()
+            # Ensure the FingAgent creation runs in a worker thread to avoid any
+            # SSL/blocking work on the main event loop.
+            fing_agent = await self.hass.async_add_executor_job(self._get_fing_agent)
             _LOGGER.debug("FingAgent instance obtained, checking get_devices method type")
 
-            # Check if get_devices() is async or sync
-            import inspect
-            if inspect.iscoroutinefunction(fing_agent.get_devices):
-                # It's async, so we need to await it
-                result = await self._async_call_with_retry(fing_agent.get_devices)
-            else:
-                # It's sync, wrap in executor
-                loop = asyncio.get_running_loop()
-                result = await loop.run_in_executor(None, fing_agent.get_devices)
+            # Always execute the agent method via the retry wrapper which itself
+            # runs the call inside an executor worker.
+            result = await self._async_call_with_retry(fing_agent.get_devices)
 
             _LOGGER.debug("FingAgent.get_devices() returned: %s", result)
             _LOGGER.debug("Result type: %s", type(result))
