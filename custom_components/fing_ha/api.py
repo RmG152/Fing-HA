@@ -42,13 +42,14 @@ class FingApi:
                 _LOGGER.debug("FingAgent initialized successfully in thread")
         return self._fing
 
-    async def _async_call_with_retry(self, coro):
+    async def _async_call_with_retry(self, coro_func):
         """Call an async coroutine with retry logic, timeouts, and detailed logging."""
         attempt = 0
         backoff = INITIAL_BACKOFF
         while attempt < MAX_RETRIES:
             try:
                 _LOGGER.debug("Attempting API call, attempt %d", attempt + 1)
+                coro = coro_func()
                 _LOGGER.debug("About to call asyncio.wait_for with coro: %s", coro)
                 # Call the coroutine directly with timeout
                 # Run the possibly-blocking coroutine in a thread so SSL
@@ -97,7 +98,7 @@ class FingApi:
             import inspect
             if inspect.iscoroutinefunction(fing_agent.get_devices):
                 # It's async, so we need to await it
-                result = await self._async_call_with_retry(fing_agent.get_devices())
+                result = await self._async_call_with_retry(fing_agent.get_devices)
             else:
                 # It's sync, wrap in executor
                 loop = asyncio.get_running_loop()
