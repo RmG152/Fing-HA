@@ -1,0 +1,39 @@
+# GitHub Actions workflow for HACS validation using hassfest
+name: HACS Validation
+
+# Triggers the workflow on pushes to main or master branches and pull requests
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  validate:
+    # Runs on the latest Ubuntu runner
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Python 3.11 environment
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      # Step 3: Install Home Assistant and its dependencies
+      - name: Install Home Assistant
+        run: |
+          python -m pip install --upgrade pip
+          pip install homeassistant
+
+      # Step 4: Run hassfest validation on the custom_components/fing_ha directory
+      - name: Run hassfest validate
+        run: hassfest validate custom_components/fing_ha

@@ -1,0 +1,34 @@
+# GitHub Actions workflow for automated releases
+# This workflow triggers when a release is published on GitHub
+
+name: Release
+
+# Trigger the workflow on release events, specifically when a release is published
+on:
+  release:
+    types: [published]
+
+jobs:
+  release:
+    # Run the job on the latest Ubuntu environment
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository code to the runner
+      # This allows access to the source code for archiving
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Create a zip archive of the custom_components/fing_ha directory
+      # This compresses the custom component files for distribution
+      - name: Create zip archive
+        run: zip -r fing_ha.zip custom_components/fing_ha
+
+      # Step 3: Upload the zip archive as a release asset
+      # Uses the softprops/action-gh-release action to attach files to the release
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: fing_ha.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

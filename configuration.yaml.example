@@ -4,7 +4,7 @@
 # Fing HA Integration Configuration
 fing_ha:
   host: "your-fing-server.local"  # Replace with your Fing server hostname/IP
-  port: 49090                        # API port (default: 49090)
+  port: 49090                     # API port (default: 49090)
   api_key: "your-api-key-here"    # Your Fing API key
   scan_interval: 30               # Scan interval in seconds (default: 30)
   enable_notifications: true      # Send notifications for new devices

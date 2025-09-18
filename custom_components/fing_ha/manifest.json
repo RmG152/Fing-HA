@@ -2,7 +2,7 @@
   "domain": "fing_ha",
   "name": "Fing HA",
   "config_flow": true,
-  "documentation": "https://github.com/your-repo/fing-ha",
+  "documentation": "https://github.com/RmG152/Fing-HA",
   "requirements": ["fing-agent-api"],
   "ssdp": [],
   "zeroconf": [],
@@ -11,5 +11,6 @@
   "codeowners": [],
   "integration_warnings": ["network", "device_tracker"],
   "iot_class": "local_polling",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "homeassistant": "2023.6.0"
 }
