@@ -61,6 +61,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             data["devices"] = {}  # Graceful degradation
             raise UpdateFailed(f"Error fetching device data: {err}")
 
+        # Fetch agent info from Fing API
+        try:
+            _LOGGER.debug("Starting agent info fetch from Fing API")
+            agent_info = await api.async_get_agent_info()
+            _LOGGER.debug("Raw agent info data fetched: %s", agent_info)
+            _LOGGER.debug("Agent info data type: %s", type(agent_info))
+            if agent_info is None:
+                _LOGGER.debug("Agent info is None, setting empty dict")
+                data["agent_info"] = {}
+            elif isinstance(agent_info, dict):
+                _LOGGER.debug("Agent info dict keys: %s", list(agent_info.keys()) if agent_info else "empty")
+                data["agent_info"] = agent_info
+            elif hasattr(agent_info, '__dict__'):
+                _LOGGER.debug("Agent info object attributes: %s", [attr for attr in dir(agent_info) if not attr.startswith('_')])
+                data["agent_info"] = agent_info
+            else:
+                _LOGGER.debug("Agent info is of unexpected type: %s", type(agent_info))
+                data["agent_info"] = agent_info
+        except Exception as err:
+            _LOGGER.error("Failed to fetch agent info: %s", err)
+            _LOGGER.debug("Agent info fetch exception details: %s", str(err))
+            data["agent_info"] = {}  # Graceful degradation
+            # Don't raise UpdateFailed for agent info, as devices are the main data
+
         # Notifications for device events
         if hass.data[DOMAIN][entry.entry_id].get("alert_mode", entry.data.get("enable_notifications", False)):
             previous_devices = hass.data[DOMAIN][entry.entry_id].get("previous_devices", {})

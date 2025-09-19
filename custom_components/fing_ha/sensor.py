@@ -144,153 +144,177 @@ class FingDeviceSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> str | int | None:
-        """Return the state of the sensor."""
+        """Return the native value for device sensors (ip / timestamps / other)."""
         try:
             devices = self.coordinator.data.get("devices")
             if not devices:
                 return None
 
-            # Handle DeviceResponse object from Fing API
+            # Helper: parse timestamp strings to datetime using HA dt util
+            def _parse_ts(val):
+                if isinstance(val, str):
+                    try:
+                        from homeassistant.util import dt as dt_util
+                        return dt_util.parse_datetime(val)
+                    except Exception:
+                        return None
+                if isinstance(val, (int, float)):
+                    try:
+                        from homeassistant.util import dt as dt_util
+                        return dt_util.utc_from_timestamp(val)
+                    except Exception:
+                        return None
+                return val
+
+            # Handle DeviceResponse object from fing-agent-api
             if hasattr(devices, '_devices'):
                 for device in devices._devices:
                     mac = getattr(device, 'mac_address', getattr(device, 'mac', None))
                     if mac == self.device_id:
-                        # Check _device_json first for accurate data
-                        if hasattr(device, '_device_json') and isinstance(getattr(device, '_device_json'), dict):
-                            device_json = getattr(device, '_device_json')
-
+                        # Prefer data in _device_json if available
+                        device_json = getattr(device, '_device_json', None)
+                        if isinstance(device_json, dict):
                             if self.sensor_type == "ip":
-                                if 'ip' in device_json and device_json['ip']:
-                                    # IP is stored as a list, get the first one
-                                    ip_list = device_json['ip']
-                                    return ip_list[0] if isinstance(ip_list, list) and ip_list else None
-                                return None
-
-                            elif self.sensor_type in ["first_seen", "last_changed"]:
-                                # Handle timestamp sensors
-                                timestamp_value = device_json.get(self.sensor_type)
-                                if timestamp_value:
-                                    # Parse timestamp if it's a string
-                                    if isinstance(timestamp_value, str):
-                                        try:
-                                            from datetime import datetime
-                                            from homeassistant.util import dt as dt_util
-                                            # Try common timestamp formats
-                                            for fmt in ['%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S']:
-                                                try:
-                                                    dt = datetime.strptime(timestamp_value, fmt)
-                                                    # Make timezone-aware (assume UTC if not specified)
-                                                    if dt.tzinfo is None:
-                                                        dt = dt_util.utc_from_timestamp(dt.timestamp())
-                                                    return dt
-                                                except ValueError:
-                                                    continue
-                                            # If no format matches, return as-is
-                                            return timestamp_value
-                                        except (ValueError, TypeError):
-                                            return None
-                                    elif isinstance(timestamp_value, (int, float)):
-                                        # Unix timestamp
-                                        try:
-                                            from homeassistant.util import dt as dt_util
-                                            dt = dt_util.utc_from_timestamp(timestamp_value)
-                                            return dt
-                                        except (ValueError, TypeError, OSError):
-                                            return None
-                                    else:
-                                        return timestamp_value
-                                return None
-
-                            else:
-                                # Try to get other attributes from _device_json
-                                if self.sensor_type in device_json:
-                                    return device_json[self.sensor_type]
-                                # Fall back to device attributes
-                                value = getattr(device, self.sensor_type, None)
-                                return value
-
-                        # Fallback to direct device attributes
+                                ip_field = device_json.get('ip') or device_json.get('ip_address')
+                                if isinstance(ip_field, list):
+                                    return ip_field[0] if ip_field else None
+                                return ip_field
+                            if self.sensor_type in ["first_seen", "last_changed"]:
+                                ts = device_json.get(self.sensor_type)
+                                return _parse_ts(ts)
+                            # generic lookup in device_json
+                            if self.sensor_type in device_json:
+                                return device_json[self.sensor_type]
+                        # Fallback to direct attributes
                         if self.sensor_type == "ip":
-                            value = getattr(device, 'ip_address', getattr(device, 'ip', None))
-                            return value if value else None
-                        elif self.sensor_type in ["first_seen", "last_changed"]:
-                            # Handle timestamp sensors from device attributes
-                            value = getattr(device, self.sensor_type, None)
-                            if value:
-                                if isinstance(value, str):
-                                    try:
-                                        from datetime import datetime
-                                        from homeassistant.util import dt as dt_util
-                                        # Try common timestamp formats
-                                        for fmt in ['%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S']:
-                                            try:
-                                                dt = datetime.strptime(value, fmt)
-                                                # Make timezone-aware (assume UTC if not specified)
-                                                if dt.tzinfo is None:
-                                                    dt = dt_util.utc_from_timestamp(dt.timestamp())
-                                                return dt
-                                            except ValueError:
-                                                continue
-                                        return value
-                                    except (ValueError, TypeError):
-                                        return None
-                                elif isinstance(value, (int, float)):
-                                    try:
-                                        from homeassistant.util import dt as dt_util
-                                        dt = dt_util.utc_from_timestamp(value)
-                                        return dt
-                                    except (ValueError, TypeError, OSError):
-                                        return None
-                                else:
-                                    return value
-                            return None
-                        else:
-                            # Try to get other attributes
-                            value = getattr(device, self.sensor_type, None)
-                            return value
+                            return getattr(device, 'ip_address', getattr(device, 'ip', None))
+                        if self.sensor_type in ["first_seen", "last_changed"]:
+                            return _parse_ts(getattr(device, self.sensor_type, None))
+                        return getattr(device, self.sensor_type, None)
 
             # Fallback to dict lookup if devices is a dict
-            elif isinstance(devices, dict):
+            if isinstance(devices, dict):
                 device_data = devices.get(self.device_id, {})
                 value = device_data.get(self.sensor_type)
                 if value is None:
-                    return None
-                # Handle timestamp sensors
+                    # try alternative keys for common types
+                    if self.sensor_type == "ip":
+                        value = device_data.get("ip") or device_data.get("ip_address")
                 if self.sensor_type in ["first_seen", "last_changed"]:
-                    if value:
-                        if isinstance(value, str):
-                            try:
-                                from datetime import datetime
-                                from homeassistant.util import dt as dt_util
-                                # Try common timestamp formats
-                                for fmt in ['%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S']:
-                                    try:
-                                        dt = datetime.strptime(value, fmt)
-                                        # Make timezone-aware (assume UTC if not specified)
-                                        if dt.tzinfo is None:
-                                            dt = dt_util.utc_from_timestamp(dt.timestamp())
-                                        return dt
-                                    except ValueError:
-                                        continue
-                                return value
-                            except (ValueError, TypeError):
-                                return None
-                        elif isinstance(value, (int, float)):
-                            try:
-                                from homeassistant.util import dt as dt_util
-                                dt = dt_util.utc_from_timestamp(value)
-                                return dt
-                            except (ValueError, TypeError, OSError):
-                                return None
-                        else:
-                            return value
-                    return None
+                    return _parse_ts(value)
                 return value
 
             return None
         except (KeyError, TypeError, AttributeError) as e:
             _LOGGER.debug("Error getting %s value for device %s: %s", self.sensor_type, self.device_id, e)
             return None
+
+
+class FingAgentSensor(CoordinatorEntity, SensorEntity):
+    """Representation of a Fing agent sensor."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, coordinator, sensor_type: str) -> None:
+        """Initialize the agent sensor."""
+        super().__init__(coordinator)
+        self.hass = hass
+        self.entry = entry
+        self.sensor_type = sensor_type
+
+        # Create unique ID for agent sensors
+        self._attr_unique_id = f"{DOMAIN}_agent_{sensor_type}"
+
+        # Create friendly name
+        sensor_type_title = sensor_type.replace('_', ' ').title()
+        if sensor_type == "ip":
+            sensor_type_title = "Agent IP Address"
+        elif sensor_type == "model_name":
+            sensor_type_title = "Agent Model Name"
+        elif sensor_type == "state":
+            sensor_type_title = "Agent State"
+        elif sensor_type == "agent_id":
+            sensor_type_title = "Agent ID"
+        elif sensor_type == "friendly_name":
+            sensor_type_title = "Agent Friendly Name"
+        elif sensor_type == "device_type":
+            sensor_type_title = "Agent Device Type"
+        elif sensor_type == "manufacturer":
+            sensor_type_title = "Agent Manufacturer"
+        self._attr_name = f"Fing {sensor_type_title}"
+
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "agent")},
+            name="Fing Agent",
+            manufacturer="Fing",
+            model="Agent",
+        )
+        # Set attributes based on sensor type
+        if sensor_type == "ip":
+            # IP addresses don't have a specific device class
+            pass
+
+    @property 
+    def native_value(self) -> str | int | None:
+        """Return the state of the agent sensor."""
+        try:
+            agent_info = self.coordinator.data.get("agent_info")
+            _LOGGER.debug("Agent sensor %s: coordinator agent_info: %s", self.sensor_type, agent_info)
+            if not agent_info:
+                _LOGGER.debug("Agent sensor %s: agent_info is empty/None", self.sensor_type)
+                return None
+
+            # Handle AgentInfoResponse object from Fing API
+            if hasattr(agent_info, '__dict__'):
+                _LOGGER.debug("Agent sensor %s: processing object with attributes", self.sensor_type)
+                # Map sensor types to their internal property names
+                property_map = {
+                    "ip": "_ip",
+                    "model_name": "_model_name", 
+                    "state": "_agent_state",
+                    "agent_id": "_agent_id",
+                    "friendly_name": "_friendly_name",
+                    "device_type": "_device_type",
+                    "manufacturer": "_manufacturer"
+                }
+                
+                # Get the internal property name
+                internal_prop = property_map.get(self.sensor_type)
+                if internal_prop:
+                    value = getattr(agent_info, internal_prop, None)
+                    _LOGGER.debug("Agent sensor %s: value=%s", self.sensor_type, value)
+                    # Clean up IP address format if needed
+                    if self.sensor_type == "ip" and value and value.startswith("http://"):
+                        value = value.replace("http://", "")
+                    return value
+
+            # Fallback to dict lookup if agent_info is a dict
+            elif isinstance(agent_info, dict):
+                _LOGGER.debug("Agent sensor %s: processing dict", self.sensor_type)
+                # Map dict keys
+                key_map = {
+                    "ip": ["ip", "ip_address"],
+                    "model_name": ["model_name", "model"],
+                    "state": ["state", "agent_state"],
+                    "agent_id": ["agent_id", "id"],
+                    "friendly_name": ["friendly_name", "name"],
+                    "device_type": ["device_type"],
+                    "manufacturer": ["manufacturer", "vendor"]
+                }
+                
+                # Try all possible keys
+                for key in key_map.get(self.sensor_type, [self.sensor_type]):
+                    if key in agent_info:
+                        value = agent_info[key]
+                        _LOGGER.debug("Agent sensor %s: dict value=%s", self.sensor_type, value)
+                        return value
+
+            _LOGGER.debug("Agent sensor %s: no value found", self.sensor_type)
+            return None
+            
+        except Exception as e:
+            _LOGGER.debug("Error getting %s value for agent: %s", self.sensor_type, e)
+            return None
+
+
 
 
 def _create_entities(coordinator, devices):
@@ -441,6 +465,11 @@ async def async_setup_entry(
     )
     duration = time.perf_counter() - start
     _LOGGER.debug("Entity preparation took %.3f seconds", duration)
+
+    # Add agent sensors
+    agent_sensor_types = ["ip", "model_name", "state", "agent_id", "friendly_name", "device_type", "manufacturer"]
+    for sensor_type in agent_sensor_types:
+        entities.append(FingAgentSensor(hass, entry, coordinator, sensor_type))
 
     # Register entities asynchronously so async_setup_entry returns promptly
     async def _async_register_entities():

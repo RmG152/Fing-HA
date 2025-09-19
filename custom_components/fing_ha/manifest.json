@@ -10,6 +10,6 @@
   "integration_type": "service",
   "iot_class": "local_polling",  
   "issue_tracker": "https://github.com/RmG152/Fing-HA/issues",
-  "requirements": ["fing-agent-api"],
+  "requirements": ["fing-agent-api==1.0.3"],
   "version": "1.0.0"
 }
